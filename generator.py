@@ -1,15 +1,32 @@
-
 import streamlit as st
 import groq
 import re
+import json
 
 # Initialize Groq Client - REPLACE WITH YOUR ACTUAL API KEY
-api_key = "Your_groq_api"
+api_key = "your_groq_api"
 client = groq.Client(api_key=api_key)
 
-def generate_mcq(category, difficulty, num_questions):
+# Define topics and subtopics
+topics = {
+    "Aptitude": [
+        "All", "Basic Arithmetic", "Algebra", "Geometry", "Trigonometry",
+        "Probability and Statistics", "Time and Work", "Speed, Distance, and Time",
+        "Profit and Loss", "Ratios and Proportions", "Permutations and Combinations"
+    ],
+    "Logical Reasoning": [
+        "All", "Analogies", "Coding-Decoding", "Blood Relations", "Syllogism",
+        "Seating Arrangement", "Puzzles", "Statement and Assumptions", "Direction Sense"
+    ],
+    "Code": ["All", "Data Structures", "Algorithms", "Database Queries", "OOP Concepts"],
+    "Verbal": ["All", "Synonyms & Antonyms", "Reading Comprehension", "Grammar", "Sentence Correction"]
+}
+
+# Function to generate MCQs
+def generate_mcq(category, subtopics, difficulty, num_questions):
+    subtopics_text = ", ".join(subtopics) if "All" not in subtopics else "All subtopics"
     prompt = f"""SYSTEM ROLE: You are a strict multiple-choice question generator with exceptional technical accuracy. 
-    Generate EXACTLY {num_questions} unique MCQs combining {category} (ONLY: aptitude/reasoning/logic/code) with {difficulty} difficulty.
+    Generate EXACTLY {num_questions} unique MCQs combining {category} ({subtopics_text}) with {difficulty} difficulty.
 
     FORMAT TEMPLATE - REPEAT THIS STRUCTURE {num_questions} TIMES:
     ---
@@ -24,17 +41,9 @@ def generate_mcq(category, difficulty, num_questions):
     1. STRICT FORMAT: No variations in numbering, spacing, or punctuation
     2. ANSWER VALIDATION: Exactly 1 correct answer per question
     3. DISTRACTORS: Wrong answers must be plausible for the difficulty
-    4. CATEGORY ADHERENCE: Technical accuracy for {category} domain
+    4. CATEGORY ADHERENCE: Technical accuracy for {category} domain ({subtopics_text})
     5. OUTPUT CONTROL: No explanations, markdown, or extra text
     6. ERROR PREVENTION: If unsure about any question, regenerate it
-
-    EXAMPLE VALID OUTPUT:
-    1. What is the time complexity of binary search?
-    a) O(n)
-    b) O(n log n)
-    c) O(log n)
-    d) O(1)
-    Answer: c
 
     WARNING: ANY FORMAT DEVIATION WILL CAUSE SYSTEM ERRORS. DOUBLE-CHECK BEFORE RESPONDING."""
 
@@ -52,6 +61,7 @@ def generate_mcq(category, difficulty, num_questions):
     )
     return response.choices[0].message.content
 
+# Parse generated MCQs
 def parse_questions(text):
     questions = []
     pattern = r"(\d+)\.\s*(.*?)\?\s*a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*d\)\s*(.*?)\s*Answer:\s*([a-d])"
@@ -73,6 +83,12 @@ def parse_questions(text):
     
     return questions
 
+# Save questions to backend file
+def save_questions_to_file(questions, category, subtopics):
+    filename = f"questions_{category}_{'_'.join(subtopics)}.json"
+    with open(filename, "w") as f:
+        json.dump(questions, f, indent=4)
+
 # Initialize session state
 if 'questions' not in st.session_state:
     st.session_state.questions = []
@@ -85,19 +101,32 @@ if 'submitted' not in st.session_state:
 
 # Sidebar controls
 st.sidebar.header("Test Settings")
-category = st.sidebar.selectbox("Category", ['Numerical', 'Logical Reasoning', 'Code', 'Verbal'])
+
+# Topic selection
+category = st.sidebar.selectbox("Category", list(topics.keys()))
+
+# Subtopic selection with scrollbar
+subtopics = st.sidebar.multiselect(
+    "Subtopics (Choose at least one)", topics[category], default=["All"]
+)
+
 difficulty = st.sidebar.selectbox("Difficulty", ['Beginner-level', 'Mid-level', 'Hard-level'])
 num_questions = st.sidebar.selectbox("Number of Questions", [10, 20, 30, 40, 50])
 
 if st.sidebar.button("Generate New Test"):
-    test_content = generate_mcq(category, difficulty, num_questions)
-    st.session_state.questions = parse_questions(test_content)
+    test_content = generate_mcq(category, subtopics, difficulty, num_questions)
+    parsed_questions = parse_questions(test_content)
+    
+    # Save questions to backend
+    save_questions_to_file(parsed_questions, category, subtopics)
+    
+    st.session_state.questions = parsed_questions
     st.session_state.current_question = 0
     st.session_state.answers = {}
     st.session_state.submitted = False
 
 # Main test interface
-st.title("Interactive MCQ Test")
+st.title("WebMobi 360 Question Generator")
 
 if st.session_state.questions:
     if not st.session_state.submitted:
@@ -132,64 +161,22 @@ if st.session_state.questions:
         
         if st.button("Submit Test"):
             st.session_state.submitted = True
-            # Process answers with full text
-            for i, q in enumerate(st.session_state.questions):
-                user_answer = st.session_state.answers.get(i, "No answer")
-                correct_letter = q['answer'].lower()
-                
-                # Extract user answer components
-                user_letter = user_answer[0].lower() if user_answer != "No answer" else " "
-                user_text = user_answer[3:] if user_answer != "No answer" else "No answer selected"
-                
-                # Get correct answer text
-                correct_index = ord(correct_letter) - ord('a')
-                correct_text = q['options'][correct_index]
-                full_correct = f"{correct_letter}) {correct_text}"
-                
-                st.session_state.answers[i] = {
-                    "user_answer": f"{user_letter}) {user_text}",
-                    "correct_answer": full_correct,
-                    "correct": user_letter == correct_letter
-                }
             st.rerun()
     else:
-        score = 0
-        results = []
-        for i, q in enumerate(st.session_state.questions):
-            result = st.session_state.answers.get(i, {})
-            if result.get('correct', False):
-                score += 1
-            results.append({
-                "question": q['question'],
-                "user_answer": result.get('user_answer', "No answer"),
-                "correct_answer": result.get('correct_answer', ""),
-                "correct": result.get('correct', False)
-            })
+        score = sum(1 for i, q in enumerate(st.session_state.questions) if 
+                    st.session_state.answers.get(i, "No answer")[0].lower() == q['answer'])
         
         st.subheader(f"Your Score: {score} out of {len(st.session_state.questions)}")
         
         with st.expander("Review Questions", expanded=True):
-            for i, result in enumerate(results):
-                st.markdown(f"**Question {i+1}**: {result['question']}")
-                
-                # User answer styling
-                user_color = "#2ECC40" if result['correct'] else "#FF4136"
-                st.markdown(
-                    f"<p style='color:{user_color}; font-weight:bold'>"
-                    f"Your answer: {result['user_answer']}</p>", 
-                    unsafe_allow_html=True
-                )
-                
-                # Correct answer styling
-                st.markdown(
-                    f"<p style='color:#0074D9; font-weight:bold'>"
-                    f"Correct answer: {result['correct_answer']}</p>", 
-                    unsafe_allow_html=True
-                )
-                
-                # Status indicator
+            for i, q in enumerate(st.session_state.questions):
+                st.markdown(f"**Question {i+1}**: {q['question']}")
+                user_answer = st.session_state.answers.get(i, "No answer")
+                correct = user_answer[0].lower() == q['answer']
+                st.markdown(f"<p style='color:{'#2ECC40' if correct else '#FF4136'}; font-weight:bold'>Your answer: {user_answer}</p>", unsafe_allow_html=True)
+                st.markdown(f"<p style='color:#0074D9; font-weight:bold'>Correct answer: {q['answer']}) {q['options'][ord(q['answer']) - ord('a')]}</p>", unsafe_allow_html=True)
                 st.markdown("---")
-        
+
         if st.button("Take New Test"):
             st.session_state.questions = []
             st.session_state.submitted = False
